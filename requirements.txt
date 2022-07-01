@@ -1,0 +1,2 @@
+cryptography~=37.0.2
+zeroconf~=0.38.7
