@@ -934,33 +934,42 @@ class UDPConnection(threading.Thread, ConnectionStatusListener):
                     raise RuntimeError(f'run: seq must be set for {wm.__class__.__name__}')
 
                 self._logger.debug(f'run: sending message: {wm.message}')
-                wm.message.encrypt(outkey=self.encoutkey, inkey=self.encinkey,
-                                   token=self.device_token, pubkey=self.pubkey)
-                buf = wm.message.frame.pack()
-                one_shot = isinstance(wm.message, (AckMessage, NakMessage))
-                # self._logger.debug(f'run: raw data to be sent: {buf.hex()}')
+                encrypted = False
+                try:
+                    wm.message.encrypt(outkey=self.encoutkey, inkey=self.encinkey,
+                                       token=self.device_token, pubkey=self.pubkey)
+                    encrypted = True
+                except ValueError as exc:
+                    # handle "ValueError: Invalid padding bytes."
+                    self._logger.error('run: failed to encrypt the message.')
+                    self._logger.exception(exc)
 
-                # sending the first time
-                if wm.phase == MessagePhase.WAITING:
-                    sock.sendto(buf, self.get_address())
-                # resending
-                elif wm.phase == MessagePhase.SENT:
-                    left = RESEND_ATTEMPTS
-                    while left > 0:
+                if encrypted:
+                    buf = wm.message.frame.pack()
+                    one_shot = isinstance(wm.message, (AckMessage, NakMessage))
+                    # self._logger.debug(f'run: raw data to be sent: {buf.hex()}')
+
+                    # sending the first time
+                    if wm.phase == MessagePhase.WAITING:
                         sock.sendto(buf, self.get_address())
-                        left -= 1
-                        if left > 0:
-                            time.sleep(0.05)
+                    # resending
+                    elif wm.phase == MessagePhase.SENT:
+                        left = RESEND_ATTEMPTS
+                        while left > 0:
+                            sock.sendto(buf, self.get_address())
+                            left -= 1
+                            if left > 0:
+                                time.sleep(0.05)
 
-                if one_shot or wm.phase == MessagePhase.SENT:
-                    wm.phase = MessagePhase.DONE
-                else:
-                    wm.phase = MessagePhase.SENT
+                    if one_shot or wm.phase == MessagePhase.SENT:
+                        wm.phase = MessagePhase.DONE
+                    else:
+                        wm.phase = MessagePhase.SENT
 
-                now = time.time()
-                self.outgoing_time = now
-                if not self.outgoing_time_1st:
-                    self.outgoing_time_1st = now
+                    now = time.time()
+                    self.outgoing_time = now
+                    if not self.outgoing_time_1st:
+                        self.outgoing_time_1st = now
 
             # receiving data
             try:
@@ -1010,9 +1019,15 @@ class UDPConnection(threading.Thread, ConnectionStatusListener):
         return message
 
     def _handle_incoming(self, buf: bytes):
-        self.incoming_time = time.time()
+        try:
+            incoming_message = Message.from_encrypted(buf, inkey=self.encinkey, outkey=self.encoutkey)
+        except ValueError as exc:
+            # handle "ValueError: Invalid padding bytes."
+            self._logger.error('_handle_incoming: failed to decrypt incoming frame:')
+            self._logger.exception(exc)
+            return
 
-        incoming_message = Message.from_encrypted(buf, inkey=self.encinkey, outkey=self.encoutkey)
+        self.incoming_time = time.time()
         seq = incoming_message.seq
 
         lpfx = f'handle_incoming({incoming_message.id}):'
