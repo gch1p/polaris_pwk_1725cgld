@@ -8,6 +8,6 @@ Examples:
 
 - [Telegram bot](https://git.ch1p.io/homekit.git/tree/src/polaris_kettle_bot.py)
 
-#E LICENSE
+## License
 
 BSD-3c
