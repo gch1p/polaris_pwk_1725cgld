@@ -1,6 +1,6 @@
 # polaris_pwk_1725cgld
 
-Polaris PWK 1725CGLD "smart" kettle python library.
+Polaris PWK 1725CGLD smart kettle python library.
 
 ## Usage
 
