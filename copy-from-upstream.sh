@@ -8,3 +8,4 @@ HOMEKIT="$1"
 cp -r $HOMEKIT/src/polaris .
 git add polaris
 git commit -am "sync with upstream"
+git push
