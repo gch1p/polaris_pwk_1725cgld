@@ -149,16 +149,18 @@ class Kettle(DeviceListener, ConnectionStatusListener):
     device_token: str
     conn: Optional[UDPConnection]
     conn_status: Optional[ConnectionStatus]
+    _read_timeout: Optional[int]
     _logger: logging.Logger
     _find_evt: threading.Event
 
-    def __init__(self, mac: str, device_token: str):
+    def __init__(self, mac: str, device_token: str, read_timeout: Optional[int] = None):
         super().__init__()
         self.mac = mac
         self.device = None
         self.device_token = device_token
         self.conn = None
         self.conn_status = None
+        self._read_timeout = read_timeout
         self._find_evt = threading.Event()
         self._logger = logging.getLogger(f'{__name__}.{self.__class__.__name__}')
 
@@ -205,10 +207,13 @@ class Kettle(DeviceListener, ConnectionStatusListener):
         assert self.device.curve == 29, f'curve type {self.device.curve} is not implemented'
         assert self.device.protocol == 2, f'protocol {self.device.protocol} is not supported'
 
+        kw = {}
+        if self._read_timeout is not None:
+            kw['read_timeout'] = self._read_timeout
         self.conn = UDPConnection(addr=self.device.addr,
                                   port=self.device.port,
                                   device_pubkey=self.device.pubkey,
-                                  device_token=bytes.fromhex(self.device_token))
+                                  device_token=bytes.fromhex(self.device_token), **kw)
         if incoming_message_listener:
             self.conn.add_incoming_message_listener(incoming_message_listener)
 

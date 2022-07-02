@@ -28,7 +28,6 @@ _logger = logging.getLogger(__name__)
 
 PING_FREQUENCY = 3
 RESEND_ATTEMPTS = 5
-READ_TIMEOUT = 1
 ERROR_TIMEOUT = 15
 MESSAGE_QUEUE_REMOVE_DELAY = 13  # after what time to delete (and pass False to handlers, if needed) messages with phase=DONE from queue
 DISCONNECT_TIMEOUT = 15
@@ -739,6 +738,7 @@ class UDPConnection(threading.Thread, ConnectionStatusListener):
     incoming_time: float
     status: ConnectionStatus
     reconnect_tries: int
+    read_timeout: int
 
     _addr_lock: threading.Lock
     _iml_lock: threading.Lock
@@ -749,7 +749,8 @@ class UDPConnection(threading.Thread, ConnectionStatusListener):
                  addr: Union[IPv4Address, IPv6Address],
                  port: int,
                  device_pubkey: bytes,
-                 device_token: bytes):
+                 device_token: bytes,
+                 read_timeout: int = 1):
         super().__init__()
         self._logger = logging.getLogger(f'{__name__}.{self.__class__.__name__} <{hex(id(self))}>')
         self.setName(self.__class__.__name__)
@@ -771,6 +772,7 @@ class UDPConnection(threading.Thread, ConnectionStatusListener):
         self.conn_listeners = [self]
         self.status = ConnectionStatus.NOT_CONNECTED
         self.reconnect_tries = 0
+        self.read_timeout = read_timeout
 
         self._iml_lock = threading.Lock()
         self._csl_lock = threading.Lock()
@@ -880,7 +882,7 @@ class UDPConnection(threading.Thread, ConnectionStatusListener):
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.bind(('0.0.0.0', self.source_port))
-        sock.settimeout(READ_TIMEOUT)
+        sock.settimeout(self.read_timeout)
 
         while not self.interrupted:
             with self._st_lock:
@@ -924,6 +926,8 @@ class UDPConnection(threading.Thread, ConnectionStatusListener):
             # pick next (wrapped) message to send
             wm = self._get_next_message()  # wm means "wrapped message"
             if wm:
+                one_shot = isinstance(wm.message, (AckMessage, NakMessage))
+
                 if not isinstance(wm.message, (AckMessage, NakMessage)):
                     old_seq = wm.seq
                     wm.seq = self.outseq
@@ -933,7 +937,7 @@ class UDPConnection(threading.Thread, ConnectionStatusListener):
                     # message had)
                     raise RuntimeError(f'run: seq must be set for {wm.__class__.__name__}')
 
-                self._logger.debug(f'run: sending message: {wm.message}')
+                self._logger.debug(f'run: sending message: {wm.message}, one_shot={one_shot}, phase={wm.phase}')
                 encrypted = False
                 try:
                     wm.message.encrypt(outkey=self.encoutkey, inkey=self.encinkey,
@@ -946,7 +950,6 @@ class UDPConnection(threading.Thread, ConnectionStatusListener):
 
                 if encrypted:
                     buf = wm.message.frame.pack()
-                    one_shot = isinstance(wm.message, (AckMessage, NakMessage))
                     # self._logger.debug(f'run: raw data to be sent: {buf.hex()}')
 
                     # sending the first time
@@ -986,7 +989,7 @@ class UDPConnection(threading.Thread, ConnectionStatusListener):
         remove_list = []
         for wm in self.outgoing_queue:
             if wm.phase == MessagePhase.DONE:
-                if isinstance(wm.message, (AckMessage, NakMessage)) or time.time() - wm.phase_update_time >= MESSAGE_QUEUE_REMOVE_DELAY:
+                if isinstance(wm.message, (AckMessage, NakMessage, PingMessage)) or time.time() - wm.phase_update_time >= MESSAGE_QUEUE_REMOVE_DELAY:
                     remove_list.append(wm)
                 continue
             message = wm
@@ -1008,13 +1011,15 @@ class UDPConnection(threading.Thread, ConnectionStatusListener):
                 self._logger.error(f'{lpfx} rm path: removing from outgoing_queue raised an exception: {str(exc)}')
 
         # ping pong
-        if self.outgoing_time_1st != 0 and self.status == ConnectionStatus.CONNECTED:
+        if not message and self.outgoing_time_1st != 0 and self.status == ConnectionStatus.CONNECTED:
             now = time.time()
             out_delta = now - self.outgoing_time
             in_delta = now - self.incoming_time
-            if not message and max(out_delta, in_delta) > PING_FREQUENCY:
+            if max(out_delta, in_delta) > PING_FREQUENCY:
                 self._logger.debug(f'{lpfx} no activity: in for {in_delta:.2f}s, out for {out_delta:.2f}s, time to ping the damn thing')
                 message = WrappedMessage(PingMessage(), ack=True)
+                # add it to outgoing_queue in order to be aggressively resent in future (if needed)
+                self.outgoing_queue.insert(0, message)
 
         return message
 
@@ -1148,7 +1153,7 @@ class UDPConnection(threading.Thread, ConnectionStatusListener):
         assert seq is not None, 'seq is not set'
 
         if seq in self.response_handlers:
-            self._logger.warning(f'_set_response_handler(seq={seq}): handler is already set, cancelling it')
+            self._logger.debug(f'_set_response_handler(seq={seq}): handler is already set, cancelling it')
             self.response_handlers[seq].call(False,
                                              error_message=f'_set_response_handler({seq}): error while calling old callback')
         self.response_handlers[seq] = wm
