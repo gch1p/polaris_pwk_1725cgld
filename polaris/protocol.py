@@ -1047,7 +1047,7 @@ class UDPConnection(threading.Thread, ConnectionStatusListener):
             self.inseq = seq
 
         if seq < seq_max < 0xfd:
-            self._logger.warning(f'{lpfx} dropping: seq={seq}, {seq_name}={seq_name}')
+            self._logger.debug(f'{lpfx} dropping: seq={seq}, {seq_name}={seq_max}')
             return
 
         if seq not in self.response_handlers:
